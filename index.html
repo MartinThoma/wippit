@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Wippit!</title>
+  <meta name="description" content="Wippit! – a colourful seesaw ball-stacking puzzle. Plays offline.">
+  <meta name="theme-color" content="#1c1240">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Wippit!">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="logo" aria-label="Wippit!">Wippit<span>!</span></div>
+      <div class="topbar-buttons">
+        <button id="btn-install" class="btn small" hidden>Install app</button>
+        <button id="btn-sound" class="btn small icon" aria-label="Toggle sound" title="Sound (M)">🔊</button>
+        <button id="btn-pause" class="btn small" title="Pause (P)" disabled>Pause</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel panel-stats">
+        <div class="stat"><span class="stat-label">Score</span><span id="hud-score" class="stat-value">0</span></div>
+        <div class="stat"><span class="stat-label">Best</span><span id="hud-best" class="stat-value">0</span></div>
+        <div class="stat"><span class="stat-label">Level</span><span id="hud-level" class="stat-value">1</span></div>
+        <div class="stat"><span class="stat-label">Popped</span><span id="hud-cleared" class="stat-value">0</span></div>
+        <div class="stat"><span class="stat-label">Chain</span><span id="hud-chain" class="stat-value">–</span></div>
+      </aside>
+
+      <div class="board-wrap" id="board-wrap">
+        <canvas id="board" aria-label="Game board"></canvas>
+        <div id="overlay" class="overlay">
+          <section class="screen" data-screen="menu">
+            <h1 class="title">Wippit<span>!</span></h1>
+            <p class="tagline">Stack · Tip · Catapult · Pop</p>
+            <button id="btn-play" class="btn big">Play</button>
+            <button id="btn-help" class="btn">How to play</button>
+            <p class="version">version <span id="version">dev</span></p>
+          </section>
+
+          <section class="screen" data-screen="help" hidden>
+            <h2>How to play</h2>
+            <ul class="rules">
+              <li>Balls drop one at a time. Steer with <kbd>←</kbd> <kbd>→</kbd> or the mouse, drop with <kbd>Space</kbd> or a click.</li>
+              <li>Join <b>three or more balls of one colour</b> – side by side, stacked or diagonal – and they pop.</li>
+              <li>Every ball shows its <b>weight</b>. Each pair of columns rests on a <b>seesaw</b>. When one side becomes 3 or more heavier, it tips and the light side <b>catapults</b> its top ball into the next column.</li>
+              <li><b>Rainbow balls</b> match any colour. <b>Bombs</b> blast everything around them when they land.</li>
+              <li>Pop balls to level up – the drops get faster. It's over when a column is full.</li>
+            </ul>
+            <button id="btn-help-back" class="btn">Back</button>
+          </section>
+
+          <section class="screen" data-screen="paused" hidden>
+            <h2>Paused</h2>
+            <button id="btn-resume" class="btn big">Resume</button>
+            <button id="btn-quit" class="btn">Quit to menu</button>
+          </section>
+
+          <section class="screen" data-screen="over" hidden>
+            <h2>Game over</h2>
+            <p class="final">Score <b id="final-score">0</b></p>
+            <p id="final-best" class="final-best" hidden>★ New best score! ★</p>
+            <p class="final-detail" id="final-detail"></p>
+            <button id="btn-again" class="btn big">Play again</button>
+            <button id="btn-menu" class="btn">Menu</button>
+          </section>
+        </div>
+      </div>
+
+      <aside class="panel panel-next">
+        <div class="stat stat-next">
+          <span class="stat-label">Next</span>
+          <canvas id="next" aria-label="Next balls"></canvas>
+        </div>
+        <div class="keys">
+          <div><kbd>←</kbd><kbd>→</kbd> move</div>
+          <div><kbd>↓</kbd> soft drop</div>
+          <div><kbd>Space</kbd> drop</div>
+          <div><kbd>P</kbd> pause · <kbd>M</kbd> mute</div>
+        </div>
+      </aside>
+    </main>
+
+    <div class="touch-controls" id="touch-controls">
+      <button class="btn touch" data-action="left" aria-label="Move left">◀</button>
+      <button class="btn touch" data-action="drop" aria-label="Drop">▼</button>
+      <button class="btn touch" data-action="right" aria-label="Move right">▶</button>
+    </div>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+
+  <script src="./version.js"></script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

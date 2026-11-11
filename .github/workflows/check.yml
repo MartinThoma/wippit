@@ -1,0 +1,17 @@
+# Makes sure the committed sw.js / version.js / icons match the sources.
+# A stale sw.js would stop installed copies of the game from auto-updating.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: make check
