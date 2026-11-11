@@ -31,7 +31,7 @@
         <div class="stat"><span class="stat-label">Score</span><span id="hud-score" class="stat-value">0</span></div>
         <div class="stat"><span class="stat-label">Best</span><span id="hud-best" class="stat-value">0</span></div>
         <div class="stat"><span class="stat-label">Level</span><span id="hud-level" class="stat-value">1</span></div>
-        <div class="stat"><span class="stat-label">Popped</span><span id="hud-cleared" class="stat-value">0</span></div>
+        <div class="stat"><span class="stat-label">Removed</span><span id="hud-cleared" class="stat-value">0</span></div>
         <div class="stat"><span class="stat-label">Chain</span><span id="hud-chain" class="stat-value">–</span></div>
       </aside>
 
@@ -40,7 +40,7 @@
         <div id="overlay" class="overlay">
           <section class="screen" data-screen="menu">
             <h1 class="title">Wippit<span>!</span></h1>
-            <p class="tagline">Stack · Tip · Catapult · Pop</p>
+            <p class="tagline">Pick · Drop · Tip · Fly · Pop</p>
             <button id="btn-play" class="btn big">Play</button>
             <button id="btn-help" class="btn">How to play</button>
             <p class="version">version <span id="version">dev</span></p>
@@ -49,12 +49,13 @@
           <section class="screen" data-screen="help" hidden>
             <h2>How to play</h2>
             <ul class="rules">
-              <li>Balls drop one at a time. Steer with <kbd>←</kbd> <kbd>→</kbd> or the mouse, drop with <kbd>Space</kbd> or a click.</li>
-              <li>Join <b>three or more balls of one colour</b> – side by side, stacked or diagonal – and they pop.</li>
-              <li>Every ball shows its <b>weight</b>. Each pair of columns rests on a <b>seesaw</b>. When one side becomes 3 or more heavier, it tips and the light side <b>catapults</b> its top ball into the next column.</li>
-              <li><b>Rainbow balls</b> match any colour. <b>Bombs</b> blast everything around them when they land.</li>
-              <li>Pop balls to level up – the drops get faster. It's over when a column is full.</li>
+              <li><b>Pick</b> a ball from the bottom row of the depot with the crane (<kbd>Space</kbd> or click), carry it over a column and <b>drop</b> it (<kbd>Space</kbd> or click). Steer with <kbd>←</kbd> <kbd>→</kbd> or the mouse.</li>
+              <li>Three or more balls of one colour <b>side by side</b> pop – together with every ball of that colour touching them. Five of a colour <b>stacked</b> fuse into one heavy ball.</li>
+              <li>Each column is a <b>pan on a seesaw</b> that shows its total weight. The heavier pan sinks and holds 8 balls, a raised pan only 6. When a seesaw <b>swings over</b>, the top ball of the rising pan is catapulted <b>as many columns as the weight difference</b>, towards the heavy side. The pan blinks and the path is shown before you drop.</li>
+              <li>A ball that <b>flies off the board comes back on the other side</b> – changed: balls become hearts, hearts become bombs, bombs become hearts.</li>
+              <li>Pop again while the <b>bonus lamp</b> is lit for double points. The game ends when a stack touches the ceiling.</li>
             </ul>
+            <ul class="legend" id="legend"></ul>
             <button id="btn-help-back" class="btn">Back</button>
           </section>
 
@@ -76,14 +77,11 @@
       </div>
 
       <aside class="panel panel-next">
-        <div class="stat stat-next">
-          <span class="stat-label">Next</span>
-          <canvas id="next" aria-label="Next balls"></canvas>
-        </div>
+        <div class="stat"><span class="stat-label">Bonus</span><div class="bonus"><div id="bonus-bar" class="bonus-bar"></div></div></div>
+        <div class="stat"><span class="stat-label">Next level in</span><span id="hud-next-level" class="stat-value small">25 balls</span></div>
         <div class="keys">
-          <div><kbd>←</kbd><kbd>→</kbd> move</div>
-          <div><kbd>↓</kbd> soft drop</div>
-          <div><kbd>Space</kbd> drop</div>
+          <div><kbd>←</kbd><kbd>→</kbd> move crane</div>
+          <div><kbd>Space</kbd> pick / drop</div>
           <div><kbd>P</kbd> pause · <kbd>M</kbd> mute</div>
         </div>
       </aside>
@@ -91,7 +89,7 @@
 
     <div class="touch-controls" id="touch-controls">
       <button class="btn touch" data-action="left" aria-label="Move left">◀</button>
-      <button class="btn touch" data-action="drop" aria-label="Drop">▼</button>
+      <button class="btn touch" data-action="drop" aria-label="Pick or drop">▼</button>
       <button class="btn touch" data-action="right" aria-label="Move right">▶</button>
     </div>
 

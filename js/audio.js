@@ -75,6 +75,22 @@ export class Sfx {
       case 'drop':
         this.tone({ freq: 420, end: 140, dur: 0.12, gain: 0.12, type: 'triangle' });
         break;
+      case 'grab':
+        this.tone({ freq: 300, end: 520, dur: 0.09, gain: 0.12, type: 'triangle' });
+        break;
+      case 'warp':
+        this.tone({ freq: 900, end: 1800, dur: 0.18, gain: 0.16, type: 'sine' });
+        this.tone({ freq: 1200, end: 300, dur: 0.22, gain: 0.1, type: 'triangle', delay: 0.05 });
+        break;
+      case 'zap':
+        this.tone({ freq: 1500, end: 200, dur: 0.25, gain: 0.18, type: 'sawtooth' });
+        break;
+      case 'stone':
+        this.noise({ dur: 0.25, gain: 0.25, freq: 500 });
+        break;
+      case 'merge':
+        [330, 440, 660].forEach((f, i) => this.tone({ freq: f, end: f * 1.2, dur: 0.16, gain: 0.14, type: 'triangle', delay: i * 0.07 }));
+        break;
       case 'land':
         this.tone({ freq: 170, end: 70, dur: 0.13, gain: 0.3 });
         this.noise({ dur: 0.08, gain: 0.12, freq: 1200 });

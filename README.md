@@ -1,25 +1,37 @@
 # Wippit!
 
-A colourful, offline-first ball-stacking puzzle for the browser. Balls with
-weights drop into columns that rest on seesaws; when one side gets too heavy
-the seesaw tips and catapults a ball into the next column. Pop three or more
-of a colour to score.
+A colourful, offline-first puzzle for the browser in the spirit of the 1997
+seesaw-and-marbles classics. Numbered balls are dropped onto pans that hang on
+seesaws. The heavier pan sinks; when a seesaw swings over, the top ball of the
+rising pan is catapulted across the board, and balls that leave the board come
+back on the other side as something else.
 
 Play it: https://martinthoma.github.io/wippit/
 
 ## How to play
 
-* Balls drop one at a time. Steer with `←` `→` (or move the mouse), drop with
-  `Space` (or click). `↓` is a soft drop.
-* Join **three or more balls of one colour** – side by side, stacked or
-  diagonally – and they pop. Chains after a pop multiply the score.
-* Every ball shows its **weight** (1–9). Each pair of columns rests on a
-  **seesaw**. When one side becomes heavier by 3 or more, it tips and the
-  light side **catapults** its top ball into the neighbouring column.
-* **Rainbow balls** match any colour. **Bombs** blast everything around them
-  when they land.
-* Pop balls to level up (faster drops, more colours). The game is over when a
-  column is full.
+* A **crane** hangs above the board, below a **depot** of two rows of balls.
+  Move the crane with `←` `→` (or the mouse), press `Space` (or click) to
+  **pick** the ball from the depot's bottom row, move again and press `Space`
+  to **drop** it into a column.
+* Three or more balls of one colour **side by side** pop, together with every
+  ball of that colour touching them. Five of a colour **stacked** fuse into one
+  ball with the combined weight.
+* Every column is a **pan on a seesaw** and shows its total weight. The heavier
+  pan sinks and holds 8 balls, a raised pan only 6. When a seesaw **swings
+  over**, the top ball of the rising pan is catapulted **as many columns as the
+  weight difference**, towards the heavy side. Before you drop, the affected
+  pan blinks and the flight path is shown, so you can aim your throws.
+* A ball that **flies off the board re-enters on the other side**: balls become
+  hearts, hearts become bombs, bombs become hearts, other specials become bombs.
+  Hearts pop only with hearts, jokers or bombs.
+* Specials appear in the depot: joker, bomb, drill, zap, colour zap, tint,
+  tint 3×3, leveller, stonemaker, and a silver star every 50 balls (three in a
+  row clear the board; two stacked make a gold star). The in-game help lists
+  them all.
+* Pop again while the **bonus lamp** is lit for double points. Every 25 balls
+  the level rises and more colours and specials appear. The game ends when a
+  stack touches the ceiling.
 * `P` pauses, `M` toggles sound.
 
 The game works on desktop first; on phones there are on-screen buttons.

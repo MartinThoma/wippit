@@ -1,58 +1,81 @@
 // Wippit! — core rules and state machine. No DOM, no rendering.
 //
-// Coordinates: column x in [0, COLS), row y counts from the bottom (0) upwards.
-// Each column is a stack (array) of blocks, index 0 at the bottom. Blocks carry a
-// visual position `y` (float) so the renderer can animate falling and tilting.
+// Board: COLS columns on COLS/2 seesaws. Each column is a stack (array, index 0 at
+// the bottom) resting on a pan. A pan sits 0, 1 or 2 rows up depending on its
+// seesaw (down / level / up), so a pan holds 8, 7 or 6 balls below the ceiling.
+// "Absolute rows" (pan offset + stack index) are what counts for horizontal
+// neighbours, since a raised pan shifts its whole stack.
+//
+// Above the ceiling hangs a crane; above that a depot of 2 rows of balls. The
+// player picks a ball from the depot's bottom row, carries it to a column and
+// drops it. A seesaw tilts to its heavier side; when it swings over, the top
+// ball of the rising pan is catapulted as many columns as the weight difference
+// (towards the heavy side). Balls that leave the board wrap around and come back
+// changed (ball -> heart -> bomb -> heart; other specials -> bomb).
 
-export const COLS = 6;
-export const ROWS = 12;
-export const COLORS = ['red', 'blue', 'green', 'yellow', 'purple'];
-export const TIP_THRESHOLD = 3;        // weight difference that tips a seesaw
-export const MATCH_DIAGONAL = true;    // diagonal neighbours count for matches
-export const BLOCKS_PER_LEVEL = 25;
-export const MAX_LEVEL = 20;
-export const TILT_ROWS = 0.3;          // how far a column moves up/down when tipped
+export const COLS = 8;
+export const ROWS = 8;                 // ceiling: absolute row 8 is out of bounds
+export const COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan'];
+export const BALLS_PER_LEVEL = 25;     // balls dropped per level
+export const STAR_EVERY = 50;          // a silver star enters the depot every N balls
+export const BONUS_TIME = 8;           // seconds the bonus lamps stay lit after a pop
+export const MAX_LEVEL = 30;
+export const CRANE_ROW = 9;            // absolute row where the carried ball hangs
+export const DEPOT_ROW = 10;           // absolute row of the depot's bottom row
+export const TOTAL_ROWS = 12;          // rows 0..11 (board, crane, two depot rows)
 
+/** Kinds that stay on the board as blocks. Everything else is consumed on impact. */
+export const STAYS = new Set(['ball', 'joker', 'bomb', 'heart', 'stone', 'star', 'gold']);
+
+export const KIND_INFO = {
+  joker: ['Joker', 'Counts as any colour, even as a heart.'],
+  bomb: ['Bomb', 'Blasts a 3×3 area where it lands. On an empty pan it waits for the next ball.'],
+  heart: ['Heart', 'A ball that flew off the board. Pops only with other hearts, jokers or bombs.'],
+  star: ['Silver star', 'Arrives every 50 balls. Three in a row clear the whole board.'],
+  gold: ['Gold star', 'Two silver stars stacked. Three golds in a row clear the board and double your score.'],
+  stone: ['Stone', 'Never pops. Only bombs, drills and zaps remove it.'],
+  drill: ['Drill', 'Destroys the whole stack it lands on.'],
+  zap: ['Zap', 'Destroys every ball in the row it hits.'],
+  colorzap: ['Colour zap', 'Destroys every ball of the colour it hits.'],
+  tint: ['Tint', 'Recolours the whole stack to the colour of its top ball.'],
+  tint3: ['Tint 3×3', 'Recolours a 3×3 area to the colour it hits.'],
+  level: ['Leveller', 'Sets the weight of every ball in the stack to 0.'],
+  stonemaker: ['Stonemaker', 'Turns a 3×3 area into stones. Beware.'],
+};
+
+const FALL_SPEED = 22;                 // rows / s for the dropped ball
 const GRAVITY = 48;                    // rows / s^2 for settling blocks
-const FLIGHT_TIME = 0.6;               // s, catapult flight
 const CLEAR_TIME = 0.4;                // s, pop animation
-const SPAWN_Y = ROWS + 0.8;            // the active ball enters from above the board
-const HARD_DROP_SPEED = 48;            // rows / s
-const SOFT_DROP_SPEED = 12;            // rows / s
-const TILT_SPEED = 5;                  // tilt units / s
-const MAX_CATAPULTS_PER_TURN = 40;     // safety valve against endless ping-pong
-const NEIGHBORS = MATCH_DIAGONAL
-  ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
-  : [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const MERGE_TIME = 0.45;               // s, five-merge animation
+const TILT_SPEED = 4.5;                // tilt units / s (a full swing is 2 units)
+const MAX_THROWS_PER_TURN = 60;        // safety valve
 
 let nextId = 1;
 
 export function makeBlock(kind, color, weight) {
   return {
     id: nextId++,
-    kind,            // 'ball' | 'joker' | 'bomb'
-    color,           // one of COLORS (bombs keep one but never match)
-    weight,          // 1..9
-    y: 0,            // visual row (float)
-    vy: 0,           // fall speed (rows / s)
-    state: 'rest',   // 'rest' | 'clearing' | 'flying'
+    kind,            // see STAYS / KIND_INFO
+    color,           // COLORS entry, or 'heart' / 'star' / 'gold', or null
+    weight,          // 0..n (specials are weightless)
+    y: 0,            // visual stack index (float) while settling
+    vy: 0,
+    state: 'rest',   // 'rest' | 'clearing' | 'flying' | 'merging'
     clear: 0,        // pop animation progress 0..1
-    flight: null,    // { x0, y0, x1, y1, t, dur, h } while flying
-    armed: false,    // bombs: explode at the next resolution step
+    flight: null,
+    dormant: false,  // bombs resting on an empty pan
   };
-}
-
-export function fallSpeed(level) {
-  return Math.min(1.1 + 0.4 * (level - 1), 9);
 }
 
 export function flightPosAt(f, t) {
   t = Math.max(0, Math.min(1, t));
   return {
-    x: f.x0 + (f.x1 - f.x0) * t,
-    y: f.y0 + (f.y1 - f.y0) * t + f.h * 4 * t * (1 - t),
+    x: f.x0 + (f.xRaw - f.x0) * t,                      // unwrapped column
+    y: f.y0 + (f.y1 - f.y0) * t + f.h * 4 * t * (1 - t), // absolute row
   };
 }
+
+export const wrapX = (x) => ((x % COLS) + COLS) % COLS;
 
 export class Game {
   constructor(hooks = {}) {
@@ -64,47 +87,56 @@ export class Game {
     this.cols = Array.from({ length: COLS }, () => []);
     this.seesaws = [];
     for (let x = 0; x + 1 < COLS; x += 2) {
-      // state: -1 = left side down, 0 = level, +1 = right side down
+      // state: -1 = left pan down, 0 = level, +1 = right pan down. tilt animates towards state.
       this.seesaws.push({ left: x, right: x + 1, state: 0, tilt: 0 });
     }
     this.score = 0;
-    this.cleared = 0;
     this.level = 1;
+    this.dropped = 0;    // balls dropped by the player
+    this.taken = 0;      // balls taken from the depot (for stars)
+    this.cleared = 0;
     this.chain = 0;
-    this.queue = [];
-    this.active = null;    // { block, x, y }
-    this.flying = null;    // block currently in the air
-    this.clearing = [];    // blocks currently popping
+    this.bonusUntil = 0;
+    this.starDue = false;
+    this.depot = Array.from({ length: COLS }, () => [this.randomBlock(), this.randomBlock()]);
+    this.crane = { x: Math.floor(COLS / 2) - 1, block: null };
+    this.falling = null;   // { block, x, y } the dropped ball on its way down
+    this.flying = null;    // catapulted block
+    this.clearing = [];
+    this.merging = null;   // { base, others, t }
     this.particles = [];
     this.popups = [];
-    this.phase = 'spawn';  // 'spawn' | 'control' | 'resolve' | 'over'
-    this.softDrop = false;
-    this.dropSpeed = 0;
+    this.phase = 'pick';   // 'pick' | 'drop' | 'falling' | 'resolve' | 'over'
     this.time = 0;
-    this.catapultsThisTurn = 0;
-    this.stats = { tips: 0, maxChain: 0, bombs: 0, drops: 0 };
-    this.fillQueue();
+    this.throwsThisTurn = 0;
+    this.stats = { tips: 0, maxChain: 0, bombs: 0, wraps: 0, merges: 0, farthest: 0 };
   }
 
   // ---- helpers -----------------------------------------------------------
 
-  sound(name) {
-    if (this.hooks.sound) this.hooks.sound(name);
-  }
+  sound(name) { if (this.hooks.sound) this.hooks.sound(name); }
 
-  fillQueue() {
-    while (this.queue.length < 2) this.queue.push(this.randomBlock());
-  }
+  nColors() { return Math.min(COLORS.length, 4 + Math.floor((this.level - 1) / 3)); }
 
   randomBlock() {
-    const nColors = Math.min(COLORS.length, 3 + Math.ceil(this.level / 2));
-    const color = COLORS[Math.floor(Math.random() * nColors)];
-    const weight = 1 + Math.floor(Math.random() * 9);
-    const r = Math.random();
-    let kind = 'ball';
-    if (r < 0.04) kind = 'bomb';
-    else if (r < 0.09) kind = 'joker';
-    return makeBlock(kind, color, weight);
+    if (this.starDue) {
+      this.starDue = false;
+      return makeBlock('star', 'star', 0);
+    }
+    const pExtra = Math.min(0.16, 0.05 + 0.012 * (this.level - 1));
+    if (Math.random() < pExtra) {
+      const table = [
+        ['joker', 24], ['bomb', 24], ['drill', 10], ['zap', 10], ['colorzap', 8],
+        ['tint', 8], ['tint3', 7], ['level', 5], [this.level >= 4 ? 'stonemaker' : 'joker', 4],
+      ];
+      let r = Math.random() * table.reduce((a, [, w]) => a + w, 0);
+      for (const [kind, w] of table) {
+        r -= w;
+        if (r <= 0) return makeBlock(kind, null, 0);
+      }
+    }
+    const color = COLORS[Math.floor(Math.random() * this.nColors())];
+    return makeBlock('ball', color, 1 + Math.floor(Math.random() * 9));
   }
 
   columnWeight(x) {
@@ -113,20 +145,65 @@ export class Game {
     return w;
   }
 
-  seesawOf(x) {
-    const s = this.seesaws[Math.floor(x / 2)];
-    return s && (s.left === x || s.right === x) ? s : null;
-  }
+  seesawOf(x) { return this.seesaws[x >> 1]; }
 
-  /** Vertical visual offset (in rows, positive = up) of a column due to its seesaw. */
-  colShift(x) {
+  /** Integer pan height (0 = down, 1 = level, 2 = up) by seesaw state. */
+  panRows(x) {
     const s = this.seesawOf(x);
-    if (!s) return 0;
-    return (x === s.left ? s.tilt : -s.tilt) * TILT_ROWS;
+    return x === s.left ? 1 + s.state : 1 - s.state;
   }
 
-  maxHeight() {
-    return Math.max(...this.cols.map((c) => c.length));
+  /** Animated pan height (float) by seesaw tilt. */
+  panOffset(x) {
+    const s = this.seesawOf(x);
+    return x === s.left ? 1 + s.tilt : 1 - s.tilt;
+  }
+
+  capacity(x) { return ROWS - this.panRows(x); }
+
+  /** Block at an absolute row in column x (or null). */
+  cell(x, r) {
+    if (x < 0 || x >= COLS) return null;
+    const i = r - this.panRows(x);
+    return i >= 0 && i < this.cols[x].length ? this.cols[x][i] : null;
+  }
+
+  locate(b) {
+    for (let x = 0; x < COLS; x++) {
+      const i = this.cols[x].indexOf(b);
+      if (i >= 0) return { x, i, r: this.panRows(x) + i };
+    }
+    return null;
+  }
+
+  bonusLeft() { return Math.max(0, this.bonusUntil - this.time) / BONUS_TIME; }
+
+  /**
+   * What would happen if the carried ball were dropped in column x:
+   * { overflow, tip: { rising, dir, d, xRaw, tx, crossings } | null }
+   */
+  previewDrop(x) {
+    const b = this.crane.block;
+    if (!b) return null;
+    const overflow = STAYS.has(b.kind) && this.cols[x].length + 1 > this.capacity(x);
+    let tip = null;
+    if (STAYS.has(b.kind) && b.weight > 0) {
+      const s = this.seesawOf(x);
+      const wl = this.columnWeight(s.left) + (x === s.left ? b.weight : 0);
+      const wr = this.columnWeight(s.right) + (x === s.right ? b.weight : 0);
+      const target = Math.sign(wr - wl);
+      if (target !== 0 && target !== s.state) {
+        const rising = target < 0 ? s.right : s.left;
+        if (this.cols[rising].length) tip = this.throwParams(rising, target, Math.abs(wl - wr));
+      }
+    }
+    return { overflow, tip };
+  }
+
+  throwParams(rising, target, d) {
+    const dir = target < 0 ? -1 : 1;    // towards the heavy side, over the pivot
+    const xRaw = rising + dir * d;
+    return { rising, dir, d, xRaw, tx: wrapX(xRaw), crossings: Math.abs(Math.floor(xRaw / COLS)) };
   }
 
   // ---- main update -------------------------------------------------------
@@ -135,13 +212,11 @@ export class Game {
     dt = Math.min(dt, 0.05);
     this.time += dt;
     this.updateAnimations(dt);
-    if (this.phase === 'spawn') this.spawn();
-    else if (this.phase === 'control') this.updateControl(dt);
+    if (this.phase === 'falling') this.updateFalling(dt);
     else if (this.phase === 'resolve') this.resolveStep();
   }
 
   updateAnimations(dt) {
-    // Blocks above their slot fall down with gravity.
     for (let x = 0; x < COLS; x++) {
       const col = this.cols[x];
       for (let i = 0; i < col.length; i++) {
@@ -149,29 +224,28 @@ export class Game {
         if (b.y > i) {
           b.vy += GRAVITY * dt;
           b.y -= b.vy * dt;
-          if (b.y <= i) {
-            b.y = i;
-            b.vy = 0;
-          }
+          if (b.y <= i) { b.y = i; b.vy = 0; }
         } else if (b.y < i) {
           b.y = i;
         }
       }
     }
-    // Catapulted ball.
     if (this.flying) {
-      const f = this.flying.flight;
+      const b = this.flying;
+      const f = b.flight;
       f.t += dt / f.dur;
+      while (f.crossed < f.cross.length && f.t >= f.cross[f.crossed]) {
+        f.crossed++;
+        this.transformWrapped(b);
+      }
       if (f.t >= 1) this.landFlying();
     }
-    // Seesaw tilt.
     for (const s of this.seesaws) {
       const d = s.state - s.tilt;
       const step = TILT_SPEED * dt;
       if (Math.abs(d) <= step) s.tilt = s.state;
       else s.tilt += Math.sign(d) * step;
     }
-    // Pop animation.
     if (this.clearing.length) {
       let done = false;
       for (const b of this.clearing) {
@@ -180,7 +254,11 @@ export class Game {
       }
       if (done) this.finishClear();
     }
-    // Particles and score popups.
+    if (this.merging) {
+      this.merging.t += dt / MERGE_TIME;
+      for (const b of this.merging.others) b.clear = Math.min(1, this.merging.t);
+      if (this.merging.t >= 1) this.finishMerge();
+    }
     for (const p of this.particles) {
       p.life -= dt;
       p.vy -= 30 * dt;
@@ -192,74 +270,191 @@ export class Game {
     this.popups = this.popups.filter((p) => p.t < p.life);
   }
 
-  // ---- spawning & player control ----------------------------------------
+  // ---- player actions ----------------------------------------------------
 
-  spawn() {
-    this.fillQueue();
-    const block = this.queue.shift();
-    this.fillQueue();
-    const x = Math.floor((COLS - 1) / 2);
-    this.active = { block, x, y: SPAWN_Y };
-    this.dropSpeed = 0;
-    this.catapultsThisTurn = 0;
-    this.phase = 'control';
-  }
-
-  updateControl(dt) {
-    const a = this.active;
-    const speed = Math.max(fallSpeed(this.level), this.dropSpeed, this.softDrop ? SOFT_DROP_SPEED : 0);
-    a.y -= speed * dt;
-    if (a.y <= this.cols[a.x].length) this.landActive();
-  }
-
-  landActive() {
-    const a = this.active;
-    const b = a.block;
-    const col = this.cols[a.x];
-    b.y = col.length;
-    b.vy = 0;
-    b.state = 'rest';
-    col.push(b);
-    if (b.kind === 'bomb') b.armed = true;
-    this.active = null;
-    this.chain = 0;
-    this.stats.drops++;
-    this.sound('land');
-    this.phase = 'resolve';
-  }
-
-  moveActive(dir) {
-    if (this.phase !== 'control') return false;
-    const a = this.active;
-    const nx = a.x + dir;
+  moveCrane(dir) {
+    if (this.phase !== 'pick' && this.phase !== 'drop') return false;
+    const nx = this.crane.x + dir;
     if (nx < 0 || nx >= COLS) return false;
-    if (this.cols[nx].length > a.y + 1e-6) return false; // a taller stack is in the way
-    a.x = nx;
+    this.crane.x = nx;
     this.sound('move');
     return true;
   }
 
-  moveActiveTo(x) {
-    let guard = COLS;
-    while (this.active && this.active.x !== x && guard-- > 0) {
-      if (!this.moveActive(Math.sign(x - this.active.x))) break;
+  setCrane(x) {
+    if (this.phase !== 'pick' && this.phase !== 'drop') return;
+    if (x < 0 || x >= COLS || x === this.crane.x) return;
+    this.crane.x = x;
+    this.sound('move');
+  }
+
+  /** Grab (in 'pick') or drop (in 'drop') at the crane's column. */
+  action() {
+    if (this.phase === 'pick') this.grab();
+    else if (this.phase === 'drop') this.drop();
+  }
+
+  grab() {
+    if (this.phase !== 'pick') return;
+    const slot = this.depot[this.crane.x];
+    this.crane.block = slot.shift();
+    this.taken++;
+    if (this.taken % STAR_EVERY === 0) this.starDue = true;
+    slot.push(this.randomBlock());
+    this.phase = 'drop';
+    this.sound('grab');
+  }
+
+  drop() {
+    if (this.phase !== 'drop') return;
+    const block = this.crane.block;
+    this.crane.block = null;
+    this.falling = { block, x: this.crane.x, y: CRANE_ROW };
+    this.dropped++;
+    this.chain = 0;
+    this.throwsThisTurn = 0;
+    this.phase = 'falling';
+    this.sound('drop');
+    this.updateLevel();
+  }
+
+  updateFalling(dt) {
+    const f = this.falling;
+    f.y -= FALL_SPEED * dt;
+    const landY = this.panRows(f.x) + this.cols[f.x].length;
+    if (f.y <= landY) {
+      this.falling = null;
+      this.onLand(f.block, f.x);
     }
   }
 
-  hardDrop() {
-    if (this.phase !== 'control') return;
-    this.dropSpeed = HARD_DROP_SPEED;
-    this.sound('drop');
+  // ---- landing -----------------------------------------------------------
+
+  onLand(b, x) {
+    const col = this.cols[x];
+    this.phase = 'resolve';
+    if (!STAYS.has(b.kind)) {
+      this.applyExtra(b, x);
+      return;
+    }
+    if (b.kind === 'bomb' && col.length > 0) {
+      this.explodeAt(x, this.panRows(x) + col.length);
+      return;
+    }
+    b.y = col.length;
+    b.vy = 0;
+    b.state = 'rest';
+    b.flight = null;
+    col.push(b);
+    this.sound('land');
+    if (b.kind === 'bomb') {
+      b.dormant = true;
+      return;
+    }
+    const below = col[col.length - 2];
+    if (below && below.kind === 'bomb' && below.dormant) {
+      this.explodeAt(x, this.panRows(x) + col.length - 2);
+    }
   }
 
-  setSoftDrop(on) {
-    this.softDrop = !!on;
+  applyExtra(b, x) {
+    const col = this.cols[x];
+    const top = col[col.length - 1];
+    const r = this.panRows(x) + col.length - 1; // absolute row of the ball hit
+    const doomed = new Set();
+    let label = null;
+    switch (b.kind) {
+      case 'drill':
+        col.forEach((q) => doomed.add(q));
+        label = 'DRILL';
+        break;
+      case 'zap':
+        if (top) for (let nx = 0; nx < COLS; nx++) { const q = this.cell(nx, r); if (q) doomed.add(q); }
+        label = 'ZAP';
+        break;
+      case 'colorzap':
+        if (top && top.color) this.cols.forEach((c) => c.forEach((q) => { if (q.color === top.color) doomed.add(q); }));
+        label = 'COLOUR ZAP';
+        break;
+      case 'tint':
+        if (top && top.kind === 'ball') col.forEach((q) => { if (q.kind === 'ball') q.color = top.color; });
+        label = 'TINT';
+        break;
+      case 'tint3':
+        if (top && top.kind === 'ball') this.forArea(x, r, (q) => { if (q.kind === 'ball') q.color = top.color; });
+        label = 'TINT';
+        break;
+      case 'level':
+        col.forEach((q) => { q.weight = 0; });
+        label = 'WEIGHT 0';
+        break;
+      case 'stonemaker':
+        this.forArea(x, r, (q) => { if (q.kind === 'ball' || q.kind === 'heart') { q.kind = 'stone'; q.color = null; } });
+        label = 'STONES!';
+        break;
+      default:
+        break;
+    }
+    if (doomed.size) {
+      this.destroy(doomed, 10);
+      this.sound('boom');
+    } else {
+      this.sound(b.kind === 'stonemaker' ? 'stone' : 'zap');
+    }
+    if (label) this.popups.push({ x, y: Math.max(r, this.panRows(x)) + 0.5, text: label, t: 0, life: 1.1, big: false });
+  }
+
+  forArea(x, r, fn) {
+    for (let nx = x - 1; nx <= x + 1; nx++) {
+      for (let nr = r - 1; nr <= r + 1; nr++) {
+        const q = this.cell(nx, nr);
+        if (q) fn(q, nx, nr);
+      }
+    }
+  }
+
+  /** 3x3 explosion centred on absolute cell (x, r); chains into dormant bombs. */
+  explodeAt(x, r) {
+    const doomed = new Set();
+    const queue = [[x, r]];
+    const seen = new Set();
+    while (queue.length) {
+      const [cx, cr] = queue.shift();
+      const key = `${cx},${cr}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      this.burst(cx, cr, 'bomb', 24);
+      this.forArea(cx, cr, (q, nx, nr) => {
+        if (doomed.has(q)) return;
+        doomed.add(q);
+        if (q.kind === 'bomb') queue.push([nx, nr]);
+      });
+    }
+    this.stats.bombs++;
+    this.destroy(doomed, 15);
+    this.popups.push({ x, y: r, text: 'BOOM', t: 0, life: 1.0, big: true });
+    this.sound('boom');
+  }
+
+  destroy(set, pointsEach) {
+    if (!set.size) return;
+    this.cols.forEach((col, x) => col.forEach((q, i) => {
+      if (set.has(q)) this.burst(x, this.panRows(x) + i, q.color || 'bomb', 6);
+    }));
+    this.removeBlocks(set);
+    this.score += pointsEach * set.size * this.level;
+    this.cleared += set.size;
+  }
+
+  removeBlocks(set) {
+    for (let x = 0; x < COLS; x++) this.cols[x] = this.cols[x].filter((b) => !set.has(b));
+    if (this.merging && (set.has(this.merging.base) || this.merging.others.some((b) => set.has(b)))) this.merging = null;
   }
 
   // ---- resolution --------------------------------------------------------
 
   isAnimating() {
-    if (this.flying || this.clearing.length) return true;
+    if (this.flying || this.clearing.length || this.merging) return true;
     for (const s of this.seesaws) if (s.tilt !== s.state) return true;
     for (let x = 0; x < COLS; x++) {
       const col = this.cols[x];
@@ -268,189 +463,231 @@ export class Game {
     return false;
   }
 
-  /** One step of the landing -> seesaw -> match -> gravity -> game-over loop. */
   resolveStep() {
     if (this.isAnimating()) return;
-    if (this.explodeBombs()) return;
-    if (this.checkSeesaws()) return;
     if (this.checkMatches()) return;
-    if (this.cols.some((c) => c.length >= ROWS)) {
+    if (this.checkMerges()) return;
+    if (this.checkSeesaws()) return;
+    if (this.cols.some((c, x) => this.panRows(x) + c.length > ROWS)) {
       this.gameOver();
       return;
     }
     this.chain = 0;
-    this.phase = 'spawn';
+    this.phase = 'pick';
   }
 
-  explodeBombs() {
-    const armed = [];
-    this.cols.forEach((col, x) => col.forEach((b, i) => {
-      if (b.kind === 'bomb' && b.armed) armed.push({ b, x, i });
-    }));
-    if (!armed.length) return false;
-
-    const doomed = new Set();
-    const queue = [...armed];
-    while (queue.length) {
-      const { b, x, i } = queue.shift();
-      b.armed = false;
-      if (doomed.has(b)) continue;
-      doomed.add(b);
-      this.burst(x, i, 'bomb', 26);
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          const nx = x + dx, ny = i + dy;
-          if (nx < 0 || nx >= COLS || ny < 0) continue;
-          const nb = this.cols[nx][ny];
-          if (!nb || doomed.has(nb)) continue;
-          if (nb.kind === 'bomb') queue.push({ b: nb, x: nx, i: ny }); // chain reaction
-          else doomed.add(nb);
-        }
-      }
-    }
-    this.removeBlocks(doomed);
-    const n = doomed.size;
-    const pts = 30 * n;
-    this.score += pts;
-    this.cleared += n;
-    this.stats.bombs += armed.length;
-    this.popups.push({ x: armed[0].x, y: armed[0].i, text: `BOOM +${pts}`, t: 0, life: 1.2, big: false });
-    this.sound('boom');
-    this.updateLevel();
-    return true;
-  }
-
-  checkSeesaws() {
-    if (this.catapultsThisTurn >= MAX_CATAPULTS_PER_TURN) return false;
-    let changed = false;
-    for (const s of this.seesaws) {
-      const diff = this.columnWeight(s.left) - this.columnWeight(s.right);
-      let target = 0;
-      if (diff >= TIP_THRESHOLD) target = -1;
-      else if (diff <= -TIP_THRESHOLD) target = 1;
-      if (target === s.state) continue;
-      s.state = target;
-      changed = true;
-      if (target === 0) continue;
-
-      // The heavy side drops, the light side springs up and catapults its top ball.
-      const rising = target === -1 ? s.right : s.left;
-      const heavy = target === -1 ? s.left : s.right;
-      this.stats.tips++;
-      const col = this.cols[rising];
-      if (!col.length) {
-        this.sound('tilt');
-        continue;
-      }
-      const b = col.pop();
-      let tx = rising + (rising - heavy);        // outward, away from the pivot
-      if (tx < 0 || tx >= COLS) tx = heavy;      // off the wall, back onto the partner column
-      b.state = 'flying';
-      b.flight = {
-        x0: rising, y0: col.length,
-        x1: tx, y1: this.cols[tx].length,
-        t: 0, dur: FLIGHT_TIME, h: 0,
-      };
-      b.flight.h = Math.max(2.5, Math.abs(b.flight.y1 - b.flight.y0) + 1.5);
-      this.flying = b;
-      this.catapultsThisTurn++;
-      this.sound('boing');
-      return true; // one catapult at a time, so the player can follow it
-    }
-    return changed;
-  }
-
-  landFlying() {
-    const b = this.flying;
-    const col = this.cols[b.flight.x1];
-    b.flight = null;
-    b.state = 'rest';
-    b.vy = 0;
-    b.y = col.length;
-    col.push(b);
-    if (b.kind === 'bomb') b.armed = true;
-    this.flying = null;
-    this.sound('land');
-  }
-
-  /** Flood-fill same-coloured groups (jokers are wildcards). Returns [[{x,y,b},...], ...]. */
-  findMatchGroups() {
-    const at = (x, y) => (x >= 0 && x < COLS && y >= 0 ? this.cols[x][y] || null : null);
-    const groups = [];
-    for (const color of COLORS) {
-      const visited = new Set();
-      for (let x = 0; x < COLS; x++) {
-        for (let y = 0; y < this.cols[x].length; y++) {
-          const b = this.cols[x][y];
-          if (visited.has(b) || b.kind !== 'ball' || b.color !== color) continue;
-          const group = [];
-          const stack = [{ x, y, b }];
-          visited.add(b);
-          while (stack.length) {
-            const cur = stack.pop();
-            group.push(cur);
-            for (const [dx, dy] of NEIGHBORS) {
-              const nx = cur.x + dx, ny = cur.y + dy;
-              const nb = at(nx, ny);
-              if (!nb || visited.has(nb) || nb.state !== 'rest') continue;
-              if ((nb.kind === 'ball' && nb.color === color) || nb.kind === 'joker') {
-                visited.add(nb);
-                stack.push({ x: nx, y: ny, b: nb });
-              }
-            }
+  /** Horizontal runs of 3+ pop, together with every connected ball of that colour. */
+  findClears() {
+    const matchable = (b, c) => !!b && b.state === 'rest' && (b.kind === 'joker' || (b.color !== null && b.color === c));
+    const colors = new Set();
+    this.cols.forEach((col) => col.forEach((b) => { if (b.color) colors.add(b.color); }));
+    const triggered = new Map(); // block -> colour
+    let starClear = 0;
+    for (const c of colors) {
+      for (let r = 0; r < ROWS; r++) {
+        let run = [];
+        for (let x = 0; x <= COLS; x++) {
+          const b = x < COLS ? this.cell(x, r) : null;
+          if (matchable(b, c)) {
+            run.push(b);
+            continue;
           }
-          if (group.length >= 3) groups.push(group);
+          if (run.length >= 3 && run.some((q) => q.kind !== 'joker')) {
+            for (const q of run) triggered.set(q, c);
+            if (c === 'star') starClear = Math.max(starClear, 1);
+            if (c === 'gold') starClear = 2;
+          }
+          run = [];
         }
       }
     }
-    return groups;
+    const all = new Set(triggered.keys());
+    const queue = [...triggered.entries()];
+    while (queue.length) {
+      const [b, c] = queue.shift();
+      const at = this.locate(b);
+      if (!at) continue;
+      const nbs = [this.cols[at.x][at.i - 1], this.cols[at.x][at.i + 1], this.cell(at.x - 1, at.r), this.cell(at.x + 1, at.r)];
+      for (const nb of nbs) {
+        if (matchable(nb, c) && !all.has(nb)) {
+          all.add(nb);
+          queue.push([nb, c]);
+        }
+      }
+    }
+    return { blocks: all, starClear };
   }
 
   checkMatches() {
-    const groups = this.findMatchGroups();
-    if (!groups.length) return false;
+    const { blocks, starClear } = this.findClears();
+    if (!blocks.size) return false;
     this.chain++;
     this.stats.maxChain = Math.max(this.stats.maxChain, this.chain);
-    const all = new Set();
-    for (const g of groups) {
-      const n = g.length;
-      const pts = (50 * n + 50 * (n - 3) * (n - 3)) * this.chain;
-      this.score += pts;
-      let cx = 0, cy = 0;
-      for (const c of g) { cx += c.x; cy += c.y; all.add(c.b); }
-      cx /= n; cy /= n;
-      const text = this.chain > 1 ? `+${pts}  x${this.chain}` : `+${pts}`;
-      this.popups.push({ x: cx, y: cy, text, t: 0, life: 1.1, big: this.chain > 1 });
+    const bonus = this.time < this.bonusUntil ? 2 : 1;
+    this.bonusUntil = this.time + BONUS_TIME;
+
+    let targets = blocks;
+    let pts;
+    let text;
+    if (starClear) {
+      targets = new Set();
+      this.cols.forEach((col) => col.forEach((b) => targets.add(b)));
+      pts = 100 * targets.size * this.level;
+      text = starClear === 2 ? 'GOLDEN CLEAR!' : 'STAR CLEAR!';
+      this.pendingDouble = starClear === 2;
+    } else {
+      let sumW = 0;
+      for (const b of blocks) sumW += b.weight;
+      pts = (10 * blocks.size + sumW) * this.level * bonus * this.chain;
+      text = `+${pts}`;
+      if (this.chain > 1) text += `  x${this.chain}`;
+      if (bonus > 1) text = `BONUS ${text}`;
     }
-    for (const b of all) {
+    this.score += pts;
+    let cx = 0, cy = 0;
+    for (const b of blocks) {
+      const at = this.locate(b);
+      cx += at.x;
+      cy += at.r;
+    }
+    this.popups.push({ x: cx / blocks.size, y: cy / blocks.size, text, t: 0, life: 1.2, big: this.chain > 1 || bonus > 1 || !!starClear });
+    for (const b of targets) {
       b.state = 'clearing';
       b.clear = 0;
     }
-    this.clearing = [...all];
-    this.sound(this.chain > 1 ? 'chain' : 'pop');
+    this.clearing = [...targets];
+    this.sound(starClear ? 'level' : this.chain > 1 ? 'chain' : 'pop');
     return true;
   }
 
   finishClear() {
     const set = new Set(this.clearing);
     this.cols.forEach((col, x) => col.forEach((b, i) => {
-      if (set.has(b)) this.burst(x, i, b.color, 10);
+      if (set.has(b)) this.burst(x, this.panRows(x) + i, b.color || 'bomb', 10);
     }));
     this.removeBlocks(set);
     this.clearing = [];
     this.cleared += set.size;
-    this.updateLevel();
+    if (this.pendingDouble) {
+      this.pendingDouble = false;
+      this.score *= 2;
+      this.popups.push({ x: (COLS - 1) / 2, y: ROWS / 2, text: 'SCORE x2', t: 0, life: 1.6, big: true });
+    }
   }
 
-  removeBlocks(set) {
+  /** Five same-coloured balls stacked vertically fuse into one heavy ball. */
+  checkMerges() {
     for (let x = 0; x < COLS; x++) {
-      this.cols[x] = this.cols[x].filter((b) => !set.has(b));
+      const col = this.cols[x];
+      for (let i = 0; i + 4 < col.length; i++) {
+        const base = col[i];
+        if (base.kind !== 'ball') continue;
+        let ok = true;
+        for (let k = 1; k < 5; k++) {
+          const q = col[i + k];
+          if (q.kind !== 'ball' || q.color !== base.color) { ok = false; break; }
+        }
+        if (!ok) continue;
+        if (base.kind === 'ball') {
+          const others = col.slice(i + 1, i + 5);
+          for (const q of others) { q.state = 'merging'; q.clear = 0; }
+          this.merging = { base, others, t: 0 };
+          this.sound('merge');
+          return true;
+        }
+      }
+      // two silver stars stacked become a gold star
+      for (let i = 0; i + 1 < col.length; i++) {
+        if (col[i].kind === 'star' && col[i + 1].kind === 'star') {
+          col[i + 1].state = 'merging';
+          col[i + 1].clear = 0;
+          this.merging = { base: col[i], others: [col[i + 1]], t: 0, gold: true };
+          this.sound('merge');
+          return true;
+        }
+      }
     }
-    // Blocks above the removed ones keep their visual y and therefore fall.
+    return false;
+  }
+
+  finishMerge() {
+    const m = this.merging;
+    this.merging = null;
+    const at = this.locate(m.base);
+    if (m.gold) {
+      m.base.kind = 'gold';
+      m.base.color = 'gold';
+    } else {
+      m.base.weight += m.others.reduce((a, b) => a + b.weight, 0);
+      this.score += 50 * this.level;
+      this.stats.merges++;
+    }
+    this.removeBlocks(new Set(m.others));
+    if (at) this.popups.push({ x: at.x, y: at.r + 1, text: m.gold ? 'GOLD!' : `${m.base.weight}!`, t: 0, life: 1.0, big: false });
+  }
+
+  checkSeesaws() {
+    if (this.throwsThisTurn >= MAX_THROWS_PER_TURN) return false;
+    let changed = false;
+    for (const s of this.seesaws) {
+      const wl = this.columnWeight(s.left);
+      const wr = this.columnWeight(s.right);
+      const target = Math.sign(wr - wl);
+      if (target === s.state) continue;
+      s.state = target;
+      changed = true;
+      if (target === 0) continue;
+      this.stats.tips++;
+      const rising = target < 0 ? s.right : s.left;
+      const col = this.cols[rising];
+      if (!col.length) {
+        this.sound('tilt');
+        continue;
+      }
+      const p = this.throwParams(rising, target, Math.abs(wl - wr));
+      const b = col.pop();
+      const y0 = this.panRows(rising) + col.length;
+      const y1 = this.panRows(p.tx) + this.cols[p.tx].length;
+      const cross = [];
+      for (let k = 1; k <= p.crossings; k++) {
+        const boundary = p.dir > 0 ? COLS * k - 0.5 : -COLS * (k - 1) - 0.5;
+        cross.push((boundary - rising) / (p.xRaw - rising));
+      }
+      b.state = 'flying';
+      b.flight = {
+        x0: rising, xRaw: p.xRaw, x1: p.tx, y0, y1,
+        t: 0, dur: Math.min(2.0, 0.45 + 0.07 * p.d),
+        h: Math.min(4.5, 1.5 + 0.3 * p.d),
+        cross, crossed: 0, d: p.d,
+      };
+      this.flying = b;
+      this.throwsThisTurn++;
+      this.stats.farthest = Math.max(this.stats.farthest, p.d);
+      this.sound('boing');
+      return true;
+    }
+    return changed;
+  }
+
+  /** A block that leaves the board comes back as something else. */
+  transformWrapped(b) {
+    this.stats.wraps++;
+    if (b.kind === 'ball') { b.kind = 'heart'; b.color = 'heart'; }
+    else if (b.kind === 'heart') { b.kind = 'bomb'; b.color = null; b.weight = 0; }
+    else if (b.kind === 'bomb') { b.kind = 'heart'; b.color = 'heart'; }
+    else { b.kind = 'bomb'; b.color = null; b.weight = 0; }
+    this.sound('warp');
+  }
+
+  landFlying() {
+    const b = this.flying;
+    const tx = b.flight.x1;
+    this.flying = null;
+    this.onLand(b, tx);
   }
 
   updateLevel() {
-    const lv = Math.min(MAX_LEVEL, 1 + Math.floor(this.cleared / BLOCKS_PER_LEVEL));
+    const lv = Math.min(MAX_LEVEL, 1 + Math.floor(this.dropped / BALLS_PER_LEVEL));
     if (lv > this.level) {
       this.level = lv;
       this.popups.push({ x: (COLS - 1) / 2, y: ROWS / 2, text: `LEVEL ${lv}`, t: 0, life: 1.6, big: true });
@@ -463,20 +700,14 @@ export class Game {
       const ang = Math.random() * Math.PI * 2;
       const sp = 3 + Math.random() * 9;
       this.particles.push({
-        x, y,
-        vx: Math.cos(ang) * sp,
-        vy: Math.sin(ang) * sp + 4,
-        life: 0.5 + Math.random() * 0.5,
-        maxLife: 1,
-        color,
-        r: 0.05 + Math.random() * 0.1,
+        x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp + 4,
+        life: 0.5 + Math.random() * 0.5, color, r: 0.05 + Math.random() * 0.1,
       });
     }
   }
 
   gameOver() {
     this.phase = 'over';
-    this.active = null;
     this.sound('over');
     if (this.hooks.gameOver) this.hooks.gameOver(this);
   }
